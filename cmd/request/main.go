@@ -12,12 +12,18 @@ import (
 
 const EtherTypeRARP ethernet.EtherType = 0x8035
 
-var macFlag = flag.String("mac", "", "MAC address for RARP request")
+var (
+	macFlag  = flag.String("mac", "", "MAC address for RARP request")
+	intfFlag = flag.String("intf", "", "interface for RARP request")
+)
 
 func main() {
 	flag.Parse()
 	if len(*macFlag) < 1 {
 		log.Fatal("MAC address must be provided")
+	}
+	if len(*intfFlag) < 1 {
+		log.Fatal("interface must be provided")
 	}
 
 	rarpMAC, err := net.ParseMAC(*macFlag)
@@ -25,13 +31,13 @@ func main() {
 		log.Fatalf("Invalid MAC address provided: %v", err)
 	}
 
-	intf, err := net.InterfaceByName("eth0")
+	intf, err := net.InterfaceByName(*intfFlag)
 	if err != nil {
 		log.Fatal(err)
 	}
 	ethSocket, err := packet.Listen(intf, packet.Raw, 0, nil)
 	if err != nil {
-		log.Printf("failed to packet.Listen: %v", err)
+		log.Fatalf("failed to packet.Listen: %v", err)
 	}
 
 	defer ethSocket.Close()
