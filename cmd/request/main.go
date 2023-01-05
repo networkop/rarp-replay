@@ -55,7 +55,7 @@ func main() {
 
 	ethFrame := &ethernet.Frame{
 		Destination: ethernet.Broadcast,
-		Source:      intf.HardwareAddr,
+		Source:      rarpMAC,
 		EtherType:   EtherTypeRARP,
 		Payload:     rarpBinary,
 	}
