@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"net"
 
@@ -9,7 +10,21 @@ import (
 	"github.com/mdlayher/packet"
 )
 
+const EtherTypeRARP ethernet.EtherType = 0x8035
+
+var macFlag = flag.String("mac", "", "MAC address for RARP request")
+
 func main() {
+	flag.Parse()
+	if len(*macFlag) < 1 {
+		log.Fatal("MAC address must be provided")
+	}
+
+	rarpMAC, err := net.ParseMAC(*macFlag)
+	if err != nil {
+		log.Fatalf("Invalid MAC address provided: %v", err)
+	}
+
 	intf, err := net.InterfaceByName("eth0")
 	if err != nil {
 		log.Fatal(err)
@@ -21,7 +36,7 @@ func main() {
 
 	defer ethSocket.Close()
 
-	rarp, err := arp.NewRARP(intf.HardwareAddr)
+	rarp, err := arp.NewRARP(rarpMAC)
 	if err != nil {
 		log.Fatalf("failed to arp.NewPacket: %v", err)
 	}
@@ -31,10 +46,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("error serializing RARP packet: %s", err)
 	}
-
-	const (
-		EtherTypeRARP ethernet.EtherType = 0x8035
-	)
 
 	ethFrame := &ethernet.Frame{
 		Destination: ethernet.Broadcast,
