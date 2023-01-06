@@ -13,6 +13,7 @@ import (
 	"github.com/mdlayher/arp"
 	"github.com/mdlayher/ethernet"
 	"github.com/mdlayher/packet"
+	"github.com/vishvananda/netlink"
 	"golang.org/x/net/bpf"
 )
 
@@ -28,12 +29,26 @@ func inARP(rarp gopacket.Packet, intf *net.Interface, ip netip.Addr) (*ethernet.
 		return nil, fmt.Errorf("Failed to unmarshal into arp packet: %s", err)
 	}
 
+	neighs, err := netlink.NeighList(intf.Index, netlink.FAMILY_V4)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to get a list of ARP/ND neighbors: %s", err)
+	}
+
+	var targetIP netip.Addr
+	for _, neigh := range neighs {
+		if neigh.HardwareAddr != rarpPayload.TargetHardwareAddr {
+			continue
+		}
+		targetIP, _ = netip.AddrFromSlice(neigh.IP)
+		break
+	}
+
 	p, err := arp.NewPacket(
 		arp.OperationRequest,           // Operation
 		intf.HardwareAddr,              // srcHW
 		ip,                             // srcIP
 		rarpPayload.TargetHardwareAddr, // dstHW
-		netip.MustParseAddr("0.0.0.0"), // dstIP
+		targetIP,                       // dstIP
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to arp.NewPacket: %v", err)
