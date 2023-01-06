@@ -9,12 +9,15 @@ import (
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
-	"github.com/google/gopacket/pcap"
+	"github.com/google/gopacket/pcapgo"
 	"github.com/mdlayher/arp"
 	"github.com/mdlayher/ethernet"
+	"github.com/mdlayher/packet"
+	"golang.org/x/net/bpf"
 )
 
-func inARP(rarp gopacket.Packet, intf *net.Interface, ip netip.Addr) ([]byte, error) {
+// constructor for the (inverse) ARP packet
+func inARP(rarp gopacket.Packet, intf *net.Interface, ip netip.Addr) (*ethernet.Frame, error) {
 	// gopacket does not understand RARP so using arp package instead
 	var rarpFrame ethernet.Frame
 	if err := rarpFrame.UnmarshalBinary(rarp.Data()); err != nil {
@@ -35,43 +38,45 @@ func inARP(rarp gopacket.Packet, intf *net.Interface, ip netip.Addr) ([]byte, er
 	if err != nil {
 		return nil, fmt.Errorf("failed to arp.NewPacket: %v", err)
 	}
-	log.Println(rarp)
+	log.Println(p)
 
 	inarpBinary, err := p.MarshalBinary()
 	if err != nil {
 		return nil, fmt.Errorf("error serializing RARP packet: %s", err)
 	}
 
-	ethFrame := &ethernet.Frame{
-		Destination: ethernet.Broadcast,
+	return &ethernet.Frame{
+		Destination: rarpPayload.TargetHardwareAddr,
 		Source:      intf.HardwareAddr,
 		EtherType:   ethernet.EtherTypeARP,
 		Payload:     inarpBinary,
-	}
-
-	return ethFrame.MarshalBinary()
+	}, nil
 }
 
 func arpProbe(intf *net.Interface) error {
 
-	handle, err := pcap.OpenLive(
-		intf.Name,         // interface name
-		65536,             // snaplen (packet size)
-		true,              // promisc
-		pcap.BlockForever, // timeout
-	)
+	// using pcap to catch the incoming RARP packets
+	handle, err := pcapgo.NewEthernetHandle(intf.Name)
 	if err != nil {
 		return err
 	}
 	defer handle.Close()
 
-	handle.SetBPFFilter("rarp")
+	rawInstructions, err := bpf.Assemble([]bpf.Instruction{
+		bpf.LoadAbsolute{Off: 12, Size: 2},
+		bpf.JumpIf{Cond: bpf.JumpNotEqual, Val: 0x8035, SkipTrue: 1},
+		bpf.RetConstant{Val: 4096},
+		bpf.RetConstant{Val: 0},
+	})
+
+	handle.SetBPF(rawInstructions)
 
 	packetSource := gopacket.NewPacketSource(
 		handle,
 		layers.LayerTypeEthernet,
 	)
 
+	// find the first L3 address on the interface
 	addrs, err := intf.Addrs()
 	if err != nil {
 		return err
@@ -86,16 +91,32 @@ func arpProbe(intf *net.Interface) error {
 		}
 	}
 
-	for packet := range packetSource.Packets() {
+	// setting up a raw socket for sending the ARP packets
+	ethSocket, err := packet.Listen(intf, packet.Raw, 0, nil)
+	if err != nil {
+		log.Fatalf("failed to set up a raw socket: %v", err)
+	}
+	defer ethSocket.Close()
+
+	for p := range packetSource.Packets() {
 		log.Println("Found RARP packet")
 
-		probe, err := inARP(packet, intf, addr)
+		probe, err := inARP(p, intf, addr)
 		if err != nil {
 			return err
 		}
-		if err := handle.WritePacketData(probe); err != nil {
-			log.Fatalf("Failed to send packet data :%s\n", err)
+
+		data, err := probe.MarshalBinary()
+		if err != nil {
+			return fmt.Errorf("Failed to marshal ARP frame: %s", err)
 		}
+
+		dstAddr := &packet.Addr{HardwareAddr: probe.Destination}
+
+		if _, err := ethSocket.WriteTo(data, dstAddr); err != nil {
+			log.Fatalf("ethSocket.WriteTo failed: %s", err)
+		}
+
 	}
 	return nil
 }

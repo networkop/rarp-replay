@@ -15,6 +15,7 @@ builds:
       - amd64
     main: ./cmd/request
     binary: rarp-req
+    id: "rarp-req"
   - env:
       - CGO_ENABLED=0
     goos:
@@ -23,6 +24,7 @@ builds:
       - amd64
     main: ./
     binary: rarp-reply
+    id: rarp-reply
 
 archives:
   - format: binary
