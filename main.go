@@ -36,7 +36,7 @@ func inARP(rarp gopacket.Packet, intf *net.Interface, ip netip.Addr) (*ethernet.
 
 	var targetIP netip.Addr
 	for _, neigh := range neighs {
-		if neigh.HardwareAddr != rarpPayload.TargetHardwareAddr {
+		if neigh.HardwareAddr.String() != rarpPayload.TargetHardwareAddr.String() {
 			continue
 		}
 		targetIP, _ = netip.AddrFromSlice(neigh.IP)
