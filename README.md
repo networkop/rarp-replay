@@ -1,5 +1,7 @@
 # rarp-replay
 
+Implementation of ARP/ND probe from https://datatracker.ietf.org/doc/html/draft-ietf-bess-evpn-irb-extended-mobility-08#section-8.8
+
 ## Requirements
 
 ```
