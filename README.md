@@ -13,7 +13,7 @@ In most cases, this is enough to restore network connectivity to the migrated VM
 3. When this Update reaches `switch-1`, it triggers a BGP route withdrawal, removing any prior MAC and/or MAC-IP routes in the fabric.
 4. In case the migrated VM is silent or not actively sending any packets, external connectivity to it from other subnets will be disrupted since the fabric is not aware of the new MAC-IP binding. The connectivity is restored when the VM sends the next ARP request to refresh its local neighbor cache.
 
-This is similar to a problem described in the extended MAC mobility [RFC draft](https://datatracker.ietf.org/doc/html/draft-ietf-bess-evpn-irb-extended-mobility-08#section-8.8). 
+This is similar to a [problem](https://datatracker.ietf.org/doc/html/draft-ietf-bess-evpn-irb-extended-mobility-08#section-8.8) described in the extended MAC mobility RFC draft. 
 
 ## Solution
 
