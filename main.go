@@ -17,9 +17,13 @@ import (
 	"golang.org/x/net/bpf"
 )
 
-// constructor for the (inverse) ARP packet
-func inARP(rarp gopacket.Packet, intf *net.Interface, ip netip.Addr) (*ethernet.Frame, error) {
-	// gopacket does not understand RARP so using arp package instead
+type probe struct {
+	intf *net.Interface
+	addr netip.Addr
+}
+
+func buildARP(rarp gopacket.Packet, intf *net.Interface, ip netip.Addr) (*ethernet.Frame, error) {
+	// gopacket does not understand RARP so using mdlayher/ethernet and mdlayher/arp packages instead
 	var rarpFrame ethernet.Frame
 	if err := rarpFrame.UnmarshalBinary(rarp.Data()); err != nil {
 		return nil, fmt.Errorf("Failed to unmarshal into ethernet packet: %s", err)
@@ -35,12 +39,16 @@ func inARP(rarp gopacket.Packet, intf *net.Interface, ip netip.Addr) (*ethernet.
 	}
 
 	var targetIP netip.Addr
+	targetHWAddr := rarpPayload.TargetHardwareAddr.String()
 	for _, neigh := range neighs {
-		if neigh.HardwareAddr.String() != rarpPayload.TargetHardwareAddr.String() {
+		if neigh.HardwareAddr.String() != targetHWAddr {
 			continue
 		}
 		targetIP, _ = netip.AddrFromSlice(neigh.IP)
 		break
+	}
+	if !targetIP.IsValid() {
+		return nil, fmt.Errorf("Could not find a neighbor matching %s", targetHWAddr)
 	}
 
 	p, err := arp.NewPacket(
@@ -68,14 +76,16 @@ func inARP(rarp gopacket.Packet, intf *net.Interface, ip netip.Addr) (*ethernet.
 	}, nil
 }
 
-func arpProbe(intf *net.Interface) error {
+func (p *probe) start() error {
+	log.Printf("Starting a probe on %s@%s", p.addr, p.intf.Name)
 
 	// using pcap to catch the incoming RARP packets
-	handle, err := pcapgo.NewEthernetHandle(intf.Name)
+	handle, err := pcapgo.NewEthernetHandle(p.intf.Name)
 	if err != nil {
 		return err
 	}
 	defer handle.Close()
+	log.Printf("Capturing packets on %s", p.intf.Name)
 
 	rawInstructions, err := bpf.Assemble([]bpf.Instruction{
 		bpf.LoadAbsolute{Off: 12, Size: 2},
@@ -91,32 +101,18 @@ func arpProbe(intf *net.Interface) error {
 		layers.LayerTypeEthernet,
 	)
 
-	// find the first L3 address on the interface
-	addrs, err := intf.Addrs()
-	if err != nil {
-		return err
-	}
-	var addr netip.Addr
-	for _, a := range addrs {
-		if ipnet, ok := a.(*net.IPNet); ok {
-			if ip4 := ipnet.IP.To4(); ip4 != nil {
-				addr, _ = netip.AddrFromSlice(ip4)
-				break
-			}
-		}
-	}
-
 	// setting up a raw socket for sending the ARP packets
-	ethSocket, err := packet.Listen(intf, packet.Raw, 0, nil)
+	ethSocket, err := packet.Listen(p.intf, packet.Raw, 0, nil)
 	if err != nil {
 		log.Fatalf("failed to set up a raw socket: %v", err)
 	}
 	defer ethSocket.Close()
+	log.Printf("Opened a raw socket %s", p.intf.Name)
 
-	for p := range packetSource.Packets() {
-		log.Println("Found RARP packet")
+	for pkt := range packetSource.Packets() {
+		log.Println("Received RARP packet on %s", p.intf.Name)
 
-		probe, err := inARP(p, intf, addr)
+		probe, err := buildARP(pkt, p.intf, p.addr)
 		if err != nil {
 			return err
 		}
@@ -131,26 +127,58 @@ func arpProbe(intf *net.Interface) error {
 		if _, err := ethSocket.WriteTo(data, dstAddr); err != nil {
 			log.Fatalf("ethSocket.WriteTo failed: %s", err)
 		}
+		log.Println("Sent an ARP packet on %s to %s", p.intf.Name, probe.Destination.String())
 
 	}
 	return nil
 }
 
+func newProbe(intf net.Interface) (*probe, error) {
+	p := &probe{intf: &intf}
+
+	// find the first usable IP address
+	addrs, err := intf.Addrs()
+	if err != nil {
+		return nil, err
+	}
+	var addr netip.Addr
+	for _, a := range addrs {
+		if ipnet, ok := a.(*net.IPNet); ok {
+			if ip4 := ipnet.IP.To4(); ip4 != nil {
+				addr, _ = netip.AddrFromSlice(ip4)
+				break
+			}
+		}
+	}
+	if !addr.IsValid() || addr.IsLoopback() {
+		return nil, fmt.Errorf("Could not find a valid address on %s", intf.Name)
+	}
+	p.addr = addr
+
+	return p, nil
+}
+
 func main() {
-	ifaces, err := net.Interfaces()
+	intfs, err := net.Interfaces()
 	if err != nil {
 		panic(err)
 	}
 
 	var wg sync.WaitGroup
-	for _, iface := range ifaces {
+	for _, intf := range intfs {
+		p, err := newProbe(intf)
+		if err != nil {
+			log.Print(err)
+			continue
+		}
 		wg.Add(1)
-		go func(iface net.Interface) {
+		go func() {
 			defer wg.Done()
-			if err := arpProbe(&iface); err != nil {
-				log.Printf("interface %v: %v", iface.Name, err)
+			if err := p.start(); err != nil {
+				log.Printf("interface %v: %v", intf.Name, err)
 			}
-		}(iface)
+		}()
+
 	}
 
 	wg.Wait()
